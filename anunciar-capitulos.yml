@@ -1,0 +1,52 @@
+name: Anunciar capítulos da GIGA SCAN
+
+on:
+  # A cada 30 minutos, em horários menos disputados que o minuto 00.
+  schedule:
+    - cron: "13,43 * * * *"
+  # Permite executar manualmente e mandar uma mensagem de teste.
+  workflow_dispatch:
+    inputs:
+      teste:
+        description: "Enviar mensagem de teste (sem verificar capítulos)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: giga-scan-anuncios
+  cancel-in-progress: false
+
+jobs:
+  checar-lancamentos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar arquivos do repositório
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Consultar MangaDex ou testar Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TEST_ONLY: ${{ inputs.teste }}
+        run: python bot.py
+
+      - name: Gravar histórico de capítulos anunciados
+        if: success()
+        run: |
+          if [ -n "$(git status --porcelain -- state.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "Atualizar histórico de capítulos da scan [skip ci]"
+            git push
+          else
+            echo "Sem alterações de histórico para salvar."
+          fi
