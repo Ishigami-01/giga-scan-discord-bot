@@ -1,7 +1,8 @@
-"""Anuncia os capítulos novos da GIGA SCAN no Discord via MangaDex.
+"""Anuncia capítulos novos da GIGA SCAN no Discord via MangaDex.
 
 Sem bibliotecas externas: roda no GitHub Actions usando Python padrão.
-O primeiro uso cria uma referência de capítulos existentes, sem postar o histórico.
+Na primeira execução registra os capítulos existentes, sem anunciar o histórico.
+Esta versão inclui miniatura da capa e prévia de teste com capa.
 """
 
 import json
@@ -21,7 +22,7 @@ MAX_CHAPTERS_PER_CHECK = 100
 MAX_ANNOUNCEMENTS_PER_RUN = 10
 MAX_REMEMBERED_IDS = 500
 EMBED_COLOR = 0xFF79B0
-USER_AGENT = "GigaScan-Discord-Notifier/1.0 (personal GitHub Actions notifier)"
+USER_AGENT = "GigaScan-Discord-Notifier/1.1 (personal GitHub Actions notifier)"
 
 
 def timestamp_now():
@@ -41,7 +42,7 @@ def request_json(url, *, data=None):
                 content = response.read()
                 return json.loads(content.decode("utf-8")) if content else None
         except urllib.error.HTTPError as exc:
-            # Nao imprimir o URL: ele pode conter o token secreto do webhook.
+            # Nunca imprimir a URL: ela pode conter o token secreto do webhook.
             if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
                 retry_after = exc.headers.get("Retry-After", "")
                 try:
@@ -66,7 +67,7 @@ def fetch_chapters():
         ("translatedLanguage[]", "pt-br"),
         ("order[publishAt]", "desc"),
         ("includes[]", "manga"),
-        # Mantém o conteúdo explicitamente pornográfico fora de anúncios gerais.
+        # Evita anunciar capítulos marcados como pornográficos no canal geral.
         ("contentRating[]", "safe"),
         ("contentRating[]", "suggestive"),
         ("contentRating[]", "erotica"),
@@ -78,7 +79,6 @@ def fetch_chapters():
     chapters = response.get("data")
     if not isinstance(chapters, list):
         raise RuntimeError("Lista de capítulos ausente na resposta do MangaDex.")
-    # Validar a relação do grupo para evitar anúncios de outras scans.
     verified = []
     for chapter in chapters:
         if not isinstance(chapter, dict) or not chapter.get("id"):
@@ -116,11 +116,40 @@ def manga_details(chapter):
     manga_id = relation.get("id")
     attributes = relation.get("attributes") or {}
     if not attributes and manga_id:
-        # Fallback para casos em que o API não expande o título no /chapter.
         response = request_json(f"{API_BASE}/manga/{manga_id}")
         attributes = ((response or {}).get("data") or {}).get("attributes") or {}
     title = choose_title(attributes.get("title")) or "Mangá da GIGA SCAN"
     return title[:240], manga_id
+
+
+def cover_thumbnail(manga_id):
+    """Busca a capa principal no MangaDex; se falhar, retorna None.
+
+    Capas de obras marcadas como erotica/pornographic não são mostradas
+    automaticamente em canal geral. Os avisos dos capítulos continuam normais.
+    """
+    if not manga_id:
+        return None
+    try:
+        query = urllib.parse.urlencode({"includes[]": "cover_art"})
+        response = request_json(f"{API_BASE}/manga/{manga_id}?{query}")
+        data = (response or {}).get("data") or {}
+        rating = (data.get("attributes") or {}).get("contentRating")
+        if rating in ("erotica", "pornographic"):
+            print(f"Miniatura omitida para mangá com classificação {rating}: {manga_id}")
+            return None
+        for relation in data.get("relationships") or []:
+            if relation.get("type") != "cover_art":
+                continue
+            filename = (relation.get("attributes") or {}).get("fileName")
+            if not isinstance(filename, str) or not filename:
+                continue
+            filename = urllib.parse.quote(filename, safe="._-")
+            return f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+    except (RuntimeError, TypeError, AttributeError, KeyError, ValueError) as exc:
+        # Não impedir um lançamento só porque a capa não foi encontrada.
+        print(f"Não foi possível buscar a capa de {manga_id}: {exc}")
+    return None
 
 
 def make_announcement(chapter):
@@ -148,8 +177,9 @@ def make_announcement(chapter):
     published = attrs.get("publishAt")
     if isinstance(published, str) and published:
         embed["timestamp"] = published
-    # A capa não é acrescentada automaticamente para evitar imagens impróprias
-    # em canais gerais; poderá ser habilitada após revisão editorial.
+    thumbnail_url = cover_thumbnail(manga_id)
+    if thumbnail_url:
+        embed["thumbnail"] = {"url": thumbnail_url}
     return {
         "username": "GIGA SCAN • Lançamentos",
         "content": "📢 **Novo capítulo disponível!**",
@@ -186,6 +216,18 @@ def main():
         raise RuntimeError("Configure o segredo DISCORD_WEBHOOK_URL no GitHub antes de executar.")
 
     if os.getenv("TEST_ONLY", "").strip().lower() == "true":
+        # Prévia real com capa, sem alterar state.json ou marcar capítulos como anunciados.
+        try:
+            chapters = fetch_chapters()
+            if chapters:
+                payload = make_announcement(chapters[0])
+                payload["content"] = "🧪 **PRÉVIA DE TESTE — este não é um novo lançamento!**"
+                notify(webhook, payload)
+                print("Prévia do anúncio enviada ao Discord (sem alterar histórico).")
+                return
+            print("Sem capítulos para prévia; enviando teste simples.")
+        except (RuntimeError, TypeError, ValueError) as exc:
+            print(f"Não foi possível montar a prévia: {exc}. Enviando teste simples.")
         notify(webhook, {
             "username": "GIGA SCAN • Lançamentos",
             "content": "✅ **Teste da automação GIGA SCAN:** webhook funcionando!",
@@ -198,21 +240,18 @@ def main():
     print(f"Capítulos recentes confirmados da GIGA SCAN: {len(chapters)}")
     state = load_state()
     seen = list(dict.fromkeys(str(x) for x in state.get("seen_ids", [])))
-
     if not state.get("initialized", False):
-        # Primeira execução: guardar o histórico sem anunciá-lo.
         state["initialized"] = True
         state["seen_ids"] = list(dict.fromkeys(ch["id"] for ch in chapters))[-MAX_REMEMBERED_IDS:]
         state["initialized_at"] = timestamp_now()
         save_state(state)
         print("Primeira execução concluída: histórico inicial registrado SEM enviar anúncios.")
         return
-
-    unseen = [chapter for chapter in reversed(chapters) if chapter["id"] not in set(seen)]
+    seen_set = set(seen)
+    unseen = [chapter for chapter in reversed(chapters) if chapter["id"] not in seen_set]
     if not unseen:
         print("Nenhum capítulo novo; nada a publicar.")
         return
-
     print(f"Capítulos ainda não anunciados: {len(unseen)}")
     for chapter in unseen[:MAX_ANNOUNCEMENTS_PER_RUN]:
         payload = make_announcement(chapter)
