@@ -3,6 +3,7 @@
 Sem bibliotecas externas: roda no GitHub Actions usando Python padrão.
 Na primeira execução registra os capítulos existentes, sem anunciar o histórico.
 Esta versão inclui miniatura da capa e prévia de teste com capa.
+Capas de obras erotica são permitidas; pornographic continuam bloqueadas.
 """
 
 import json
@@ -125,8 +126,8 @@ def manga_details(chapter):
 def cover_thumbnail(manga_id):
     """Busca a capa principal no MangaDex; se falhar, retorna None.
 
-    Capas de obras marcadas como erotica/pornographic não são mostradas
-    automaticamente em canal geral. Os avisos dos capítulos continuam normais.
+    Capas marcadas como pornographic não são mostradas automaticamente
+    em canal geral. Os avisos dos capítulos continuam normais.
     """
     if not manga_id:
         return None
@@ -135,7 +136,7 @@ def cover_thumbnail(manga_id):
         response = request_json(f"{API_BASE}/manga/{manga_id}?{query}")
         data = (response or {}).get("data") or {}
         rating = (data.get("attributes") or {}).get("contentRating")
-        if rating in ("erotica", "pornographic"):
+        if rating == "pornographic":
             print(f"Miniatura omitida para mangá com classificação {rating}: {manga_id}")
             return None
         for relation in data.get("relationships") or []:
@@ -145,7 +146,10 @@ def cover_thumbnail(manga_id):
             if not isinstance(filename, str) or not filename:
                 continue
             filename = urllib.parse.quote(filename, safe="._-")
-            return f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+            thumb_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+            print(f"Miniatura encontrada para {manga_id} (classificação: {rating or 'desconhecida'}).")
+            return thumb_url
+        print(f"Não há capa com nome de arquivo disponível no MangaDex para {manga_id}.")
     except (RuntimeError, TypeError, AttributeError, KeyError, ValueError) as exc:
         # Não impedir um lançamento só porque a capa não foi encontrada.
         print(f"Não foi possível buscar a capa de {manga_id}: {exc}")
@@ -180,6 +184,8 @@ def make_announcement(chapter):
     thumbnail_url = cover_thumbnail(manga_id)
     if thumbnail_url:
         embed["thumbnail"] = {"url": thumbnail_url}
+    else:
+        print(f"Sem miniatura no anúncio do mangá {manga_id}.")
     return {
         "username": "GIGA SCAN • Lançamentos",
         "content": "📢 **Novo capítulo disponível!**",
