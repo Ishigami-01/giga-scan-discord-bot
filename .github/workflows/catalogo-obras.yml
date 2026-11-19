@@ -1,0 +1,64 @@
+name: Catalogo de obras GIGA SCAN
+
+on:
+  workflow_dispatch:
+    inputs:
+      previa:
+        description: 'Apenas listar as obras, SEM enviar mensagens?' 
+        required: true
+        type: boolean
+        default: true
+      max_novas:
+        description: 'Maximo de fichas novas por rodada (1 a 100)'
+        required: true
+        type: choice
+        options:
+          - '20'
+          - '40'
+          - '60'
+          - '100'
+        default: '60'
+  schedule:
+    - cron: '17 11 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: giga-scan-catalogo
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Atualizar catalogo no Discord
+        id: catalogo
+        env:
+          CATALOGO_DISCORD_WEBHOOK_URL: ${{ secrets.CATALOGO_DISCORD_WEBHOOK_URL }}
+          CATALOGO_PREVIA: ${{ inputs.previa || 'false' }}
+          CATALOGO_MAX_NOVAS: ${{ inputs.max_novas || '60' }}
+        run: python catalogo.py
+      - name: Salvar IDs das mensagens para nao duplicar
+        if: always() && (steps.catalogo.outcome == 'success' || steps.catalogo.outcome == 'failure')
+        shell: bash
+        run: |
+          if git diff --quiet -- catalogo_state.json; then
+            echo "Nenhuma mudanca no estado."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalogo_state.json
+          git commit -m "Atualiza estado do catalogo de obras [skip ci]"
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push origin "HEAD:${{ github.ref_name }}"
