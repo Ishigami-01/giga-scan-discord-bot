@@ -2,7 +2,13 @@
   "grupo_mangadex_id": "c26db585-798d-4da5-9d0f-8a0ffd141f50",
   "max_paginas_mangadex": 15,
   "incluir_obras_eroticas": false,
-  "ajustes_por_mangadex_id": {},
+ 
+"ajustes_por_mangadex_id": {
+  "8e904201-718a-45f6-ae44-0e6d7f8c4aa3": {
+    "capa_url": "https://uploads.mangadex.org/covers/8e904201-718a-45f6-ae44-0e6d7f8c4aa3/5078fc65-200b-4af1-a3da-a07158755624.jpg.512.jpg"
+  }
+},
+  
   "obras_extras": [],
   "sinopses_oficiais": [
     {
